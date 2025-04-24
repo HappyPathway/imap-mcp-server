@@ -1,0 +1,10 @@
+{
+	"folders": [
+		{
+			"path": "../docs/python-sdk"
+		},
+		{
+			"path": "../template-mcp-server"
+		}
+	]
+}

@@ -1,0 +1,15 @@
+{
+  "servers": {
+    "imap-mcp": {
+      "type": "stdio",
+      "command": "python",
+      "args": ["src/server.py"],
+      "env": {
+        "IMAP_SERVER": "${env:IMAP_SERVER}",
+        "IMAP_USERNAME": "${env:IMAP_USERNAME}",
+        "IMAP_PASSWORD": "${env:IMAP_PASSWORD}",
+        "GOOGLE_API_KEY": "${env:GOOGLE_API_KEY}"
+      }
+    }
+  }
+}
