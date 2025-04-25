@@ -18,7 +18,7 @@ The `imap-mcp-server` is now specifically designed for Gmail, providing AI-power
 
 ## Tools
 
-The `imap-mcp-server` provides the following tools for managing and analyzing Gmail accounts:
+The `gmail-mcp-server` provides the following tools for managing and analyzing Gmail accounts:
 
 ### `test_connection`
 
