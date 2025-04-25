@@ -5,6 +5,15 @@
 		},
 		{
 			"path": "../template-mcp-server"
+		},
+		{
+			"path": "."
+		},
+		{
+			"path": "../jobsearch"
+		},
+		{
+			"path": "../../Library/Application Support/Code - Insiders/User"
 		}
 	]
 }

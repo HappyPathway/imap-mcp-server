@@ -1,0 +1,256 @@
+from functools import wraps
+from aioimaplib import aioimaplib
+from typing import List, Dict, Optional, Any
+import asyncio
+import logging
+import json
+import os
+import google.generativeai as genai
+from google.cloud import storage
+from google.auth import default
+from fastmcp import FastMCP
+from pydantic import BaseModel, Field
+from analytics import EmailAnalytics
+from database import get_session
+from models import SmartFolder
+from services.email_service import EmailService
+
+# Configure logging
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+class IMAPConfig(BaseModel):
+    host: str
+    username: str
+    password: str
+
+class GeminiConfig(BaseModel):
+    apiKey: str
+
+class GCSConfig(BaseModel):
+    project_id: str = Field(default=None, description="GCP project ID. If None, will use ADC project")
+    bucket_name: str = Field(..., description="GCS bucket containing the database")
+
+class AnalyticsConfig(BaseModel):
+    batchSize: int = 50
+    cacheDuration: int = 60
+    enableThreadAnalysis: bool = True
+    enablePriorityScoring: bool = True
+
+class FilterRule(BaseModel):
+    field: str = Field(description="Email field to apply the rule to", enum=["subject", "from", "to", "body"])
+    operator: str = Field(description="Type of match to perform", enum=["contains", "equals", "startswith", "endswith"])
+    value: str = Field(description="Value to match against")
+
+class BatchCriteria(BaseModel):
+    sender: Optional[str] = Field(default=None, description="Filter by sender email")
+    subject: Optional[str] = Field(default=None, description="Filter by subject line")
+    date_from: Optional[str] = Field(default=None, description="Filter by date (ISO format)")
+    date_to: Optional[str] = Field(default=None, description="Filter by date (ISO format)")
+    has_attachments: Optional[bool] = Field(default=None, description="Filter by attachment presence")
+
+from contextlib import asynccontextmanager
+
+# Initialize global email service
+email_service = None
+
+@asynccontextmanager
+async def server_lifespan(server: FastMCP):
+    """Manage server startup and shutdown lifecycle"""
+    global email_service
+    try:
+        # Initialize GCS and download database
+        credentials, project = default()
+        gcs_config = GCSConfig(
+            project_id=os.getenv("GCP_PROJECT", project),
+            bucket_name=os.getenv("GCS_BUCKET")
+        )
+        if not gcs_config.bucket_name:
+            raise ValueError("GCS_BUCKET environment variable must be set")
+        
+        storage_client = storage.Client(project=gcs_config.project_id, credentials=credentials)
+        bucket = storage_client.bucket(gcs_config.bucket_name)
+        logger.info(f"Connected to GCS bucket: {gcs_config.bucket_name}")
+        
+        # Download database file if it exists
+        db_blob = bucket.blob("database.sqlite")
+        if db_blob.exists():
+            db_blob.download_to_filename("database.sqlite")
+            logger.info("Downloaded database from GCS")
+        
+        # Just create the email service instance without connecting
+        email_service = EmailService()
+        logger.info("Created email service instance (not yet connected)")
+        
+        # Initialize Gemini
+        gemini_config = GeminiConfig(
+            apiKey=os.getenv("GEMINI_API_KEY")
+        )
+        if not gemini_config.apiKey:
+            raise ValueError("GEMINI_API_KEY environment variable must be set")
+        
+        genai.configure(api_key=gemini_config.apiKey)
+        logger.info("Gemini API configured successfully")
+        
+        yield {
+            "email_service": email_service,
+            "storage_client": storage_client,
+            "bucket": bucket
+        }
+    finally:
+        try:
+            # Upload database back to GCS if it exists
+            if os.path.exists("database.sqlite"):
+                bucket.blob("database.sqlite").upload_from_filename("database.sqlite")
+                logger.info("Uploaded database to GCS")
+        except Exception as e:
+            logger.error(f"Failed to upload database to GCS: {e}")
+        
+        # Cleanup email service if it was connected
+        if email_service and email_service.is_connected():
+            await email_service.disconnect()
+            logger.info("Email service disconnected")
+
+# Create FastMCP server instance with lifespan
+mcp = FastMCP("IMAP MCP Server", lifespan=server_lifespan)
+
+async def ensure_connection():
+    """Ensure IMAP connection is active"""
+    global email_service
+    if not email_service:
+        email_service = EmailService()
+    if not email_service.is_connected():
+        try:
+            connect_result = await email_service.connect()
+            if not connect_result:
+                raise RuntimeError("IMAP connection failed - check username and password")
+            logger.info("Connected to IMAP server successfully")
+        except Exception as e:
+            logger.error(f"IMAP connection error: {str(e)}")
+            raise RuntimeError(f"Failed to connect to IMAP server: {str(e)}")
+
+def with_connection(func):
+    """Decorator to ensure IMAP connection is active"""
+    @wraps(func)
+    async def wrapper(*args, **kwargs):
+        await ensure_connection()
+        return await func(*args, **kwargs)
+    return wrapper
+
+@mcp.tool()
+@with_connection
+async def list_emails(
+    folder: str = Field(default="INBOX", description="The folder to list emails from"),
+    limit: int = Field(default=10, description="Maximum number of emails to return", ge=1, le=500)
+) -> List[Dict[str, str]]:
+    """List emails from the specified folder"""
+    return await email_service.get_messages(folder, limit)
+
+@mcp.tool()
+@with_connection
+async def list_folders() -> List[Dict[str, str]]:
+    """List all folders in the Gmail account"""
+    return await email_service.get_folders()
+
+@mcp.tool()
+@with_connection
+async def move_message(
+    uid: str = Field(description="Unique identifier of the email message"),
+    from_folder: str = Field(description="Source folder containing the message"),
+    to_folder: str = Field(description="Destination folder to move the message to")
+) -> bool:
+    """Move a message from one folder to another"""
+    return await email_service.move_message(uid, from_folder, to_folder)
+
+@mcp.tool()
+@with_connection
+async def create_folder(
+    folder_name: str = Field(description="Name of the new folder to create", min_length=1)
+) -> bool:
+    """Create a new folder/label in Gmail"""
+    return await email_service.create_folder(folder_name)
+
+@mcp.tool()
+@with_connection
+async def search_emails(
+    query: str = Field(description="Search query string (supports IMAP search syntax)", min_length=1),
+    folder: str = Field(default="INBOX", description="The folder to search in")
+) -> List[Dict[str, str]]:
+    """Search for emails matching the given query"""
+    return await email_service.search_messages(query, folder)
+
+@mcp.tool()
+@with_connection
+async def get_thread(
+    thread_id: str = Field(description="The ID of the thread to retrieve")
+) -> Dict[str, Any]:
+    """Get all messages in an email thread"""
+    return await email_service.get_thread(thread_id)
+
+@mcp.tool()
+@with_connection
+async def analyze_patterns(
+    folder: str = Field(default="INBOX", description="The folder to analyze patterns in"),
+    days: int = Field(default=30, description="Number of days of history to analyze", ge=1, le=365)
+) -> Dict[str, Any]:
+    """Analyze email patterns in a folder"""
+    try:
+        messages = await email_service.get_messages(folder, limit=500)
+        analytics = EmailAnalytics()
+        return await analytics.analyze_patterns(messages, enable_thread_analysis=True)
+    except Exception as e:
+        logger.error(f"Error analyzing patterns: {str(e)}")
+        raise Exception(f"Failed to analyze patterns: {str(e)}")
+
+@mcp.tool()
+@with_connection
+async def create_smart_folder(
+    name: str = Field(description="Name of the smart folder to create"),
+    rules: List[FilterRule] = Field(description="List of filtering rules for this folder")
+) -> bool:
+    """Create a smart folder with specified filtering rules"""
+    with get_session() as session:
+        smart_folder = SmartFolder(name=name, rules=json.dumps(rules))
+        session.add(smart_folder)
+        return True
+
+@mcp.tool()
+@with_connection
+async def batch_process(
+    folder: str = Field(description="The folder to process emails from"),
+    action: str = Field(description="Action to perform", enum=["move", "delete", "label", "mark_read", "mark_unread"]),
+    filter_criteria: BatchCriteria = Field(description="Criteria to filter emails by")
+) -> Dict[str, Any]:
+    """Process multiple emails in batch based on criteria"""
+    return await email_service.batch_process(folder, action, filter_criteria)
+
+@mcp.tool()
+@with_connection
+async def add_label(
+    uid: str = Field(description="Unique identifier of the email message"),
+    label: str = Field(description="Label to add to the email")
+) -> bool:
+    """Add a label to a specific email"""
+    return await email_service.add_label(uid, label)
+
+@mcp.tool()
+@with_connection
+async def get_folder_summary(
+    folder: str = Field(description="The folder to get summary statistics for")
+) -> Dict[str, Any]:
+    """Get summary statistics for a folder"""
+    messages = await email_service.get_messages(folder, limit=100)
+    analytics = EmailAnalytics()
+    return await analytics.get_folder_summary(messages)
+
+if __name__ == "__main__":
+    try:
+        mcp.run()
+    except KeyboardInterrupt:
+        logger.info("Server shutting down...")
+    except Exception as e:
+        logger.error(f"Server error: {str(e)}")
+        raise
