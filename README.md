@@ -2,6 +2,8 @@
 
 The `imap-mcp-server` is now specifically designed for Gmail, providing AI-powered analysis and management capabilities for Gmail accounts. It leverages the Gmail API for seamless integration and advanced features.
 
+![Project Screenshot](./img.png)
+
 ## Features
 
 - **Gmail-Specific Integration**: Built exclusively for Gmail accounts using the Gmail API.
