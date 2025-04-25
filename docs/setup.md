@@ -39,6 +39,23 @@ This guide walks you through setting up the `imap-mcp-server` for managing and a
 
 3. Place your Gmail API credentials file in the path specified in the configuration (`~/.imap-mcp/credentials.json` by default).
 
+## OAuth2 Setup
+
+After downloading your credentials file, you need to complete the OAuth2 setup:
+
+1. Run the setup script:
+   ```bash
+   python src/setup_oauth.py
+   ```
+   
+   Or specify a custom credentials path:
+   ```bash
+   python src/setup_oauth.py --credentials /path/to/credentials.json
+   ```
+
+2. Follow the prompts in your browser to authorize the application.
+3. Once completed, the script will save your OAuth tokens to `~/.imap-mcp/token.json`
+
 ## Running the Server
 
 Start the server with:
