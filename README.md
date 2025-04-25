@@ -10,6 +10,93 @@ The `imap-mcp-server` is now specifically designed for Gmail, providing AI-power
 - **Google Cloud Storage Integration**: Migrate and store Gmail messages and attachments in Google Cloud Storage.
 - **Batch Processing**: Perform bulk actions on Gmail messages based on custom criteria.
 
+## MCP Server Configuration
+
+To use this server with VS Code's MCP (Model Context Protocol) functionality, add the following configuration to your VS Code `settings.json`:
+
+```json
+"mcp": {
+  "inputs": [
+    {
+      "type": "promptString",
+      "id": "gmail-username",
+      "description": "Gmail Username"
+    },
+    {
+      "type": "promptString",
+      "id": "gmail-password",
+      "description": "Gmail Password",
+      "password": true
+    },
+    {
+      "type": "promptString",
+      "id": "gemini-key",
+      "description": "Gemini API Key",
+      "password": true
+    },
+    {
+      "type": "promptString",
+      "id": "gcs-credentials",
+      "description": "Google Cloud Service Account JSON",
+      "password": true
+    }
+  ],
+  "servers": {
+    "imap-mcp": {
+      "type": "stdio",
+      "command": "${userHome}/git/imap-mcp-server/venv/bin/python",
+      "args": [
+        "${userHome}/git/imap-mcp-server/src/server.py"
+      ],
+      "env": {
+        "GEMINI_API_KEY": "${input:gemini-key}",
+        "IMAP_HOST": "imap.gmail.com",
+        "ANALYTICS_BATCH_SIZE": "50",
+        "ANALYTICS_CACHE_DURATION": "60",
+        "ANALYTICS_THREAD_ANALYSIS": "true",
+        "ANALYTICS_PRIORITY_SCORING": "true",
+        "GCS_BUCKET": "imap-mcp-server",
+        "ANALYTICS_SENDER_THRESHOLD": "7",
+        "ANALYTICS_DOMAIN_THRESHOLD": "10",
+        "ANALYTICS_UPDATE_INTERVAL": "3600",
+        "ANALYTICS_LABEL_TRACKING": "true",
+        "ANALYTICS_TYPE_CLASSIFICATION": "true",
+        "LOG_LEVEL": "ERROR"
+      }
+    }
+  }
+}
+```
+
+### Configuration Options
+
+- **Environment Variables**:
+  - `GEMINI_API_KEY`: Your Gemini API key for AI-powered analysis
+  - `IMAP_HOST`: Gmail IMAP server (default: imap.gmail.com)
+  - `ANALYTICS_BATCH_SIZE`: Number of emails to process in each batch (default: 50)
+  - `ANALYTICS_CACHE_DURATION`: Cache duration in minutes (default: 60)
+  - `ANALYTICS_THREAD_ANALYSIS`: Enable thread analysis (default: true)
+  - `ANALYTICS_PRIORITY_SCORING`: Enable priority scoring for emails (default: true)
+  - `GCS_BUCKET`: Google Cloud Storage bucket name for email storage
+  - `ANALYTICS_SENDER_THRESHOLD`: Minimum emails from a sender to trigger analysis (default: 7)
+  - `ANALYTICS_DOMAIN_THRESHOLD`: Minimum emails from a domain to trigger analysis (default: 10)
+  - `ANALYTICS_UPDATE_INTERVAL`: Analysis update interval in seconds (default: 3600)
+  - `ANALYTICS_LABEL_TRACKING`: Enable label tracking (default: true)
+  - `ANALYTICS_TYPE_CLASSIFICATION`: Enable email type classification (default: true)
+  - `LOG_LEVEL`: Logging level (default: ERROR)
+
+### Prerequisites
+
+Before using the server:
+
+1. Set up a Python virtual environment in the project directory
+2. Install the required dependencies using `pip install -r requirements.txt`
+3. Configure your VS Code settings as shown above
+4. Ensure you have valid credentials for:
+   - Gmail account (username and password)
+   - Gemini API key
+   - Google Cloud Service Account (for GCS integration)
+
 ## Requirements
 
 - A Gmail account with API access enabled.
